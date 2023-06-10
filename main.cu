@@ -1,9 +1,8 @@
 #include <iostream>
 #include <filesystem>
 #include <thrust/device_vector.h>
-#include "Camrary/Singles/src_gpu/multi_prec.h"
-
-using Unsigned = multi_prec<2>;
+#include <thrust/device_malloc.h>
+#include "mpz/mpz.h"
 
 std::vector<uint64_t> loadPrimeTable(const std::filesystem::path &fromLocation) {
     if (!std::filesystem::exists(fromLocation))
@@ -27,15 +26,96 @@ std::vector<uint64_t> loadPrimeTable(const std::filesystem::path &fromLocation) 
     return primes;
 }
 
-__global__ void findDivisor(const char* stringNumber, const uint64_t* primes, unsigned primesNumber, uint8_t* resultPlace) {
-    const unsigned threadNumber = threadIdx.x + blockIdx.x * blockDim.x, blockNumber = blockIdx.x;
-    if(threadNumber > 0) return;
-    const unsigned threadsTotal = gridDim.x * blockDim.x, maxIt = 400000 / threadsTotal;
-    Unsigned numberToFactorize = stringNumber, a = threadNumber * maxIt + 2;
+__global__ void findDivisor(mpz_t n, const uint64_t* primes, unsigned* resultPlace) {
+    const unsigned tid = blockDim.x * blockIdx.x + threadIdx.x;
+    const unsigned threads = gridDim.x * blockDim.x;
+    const unsigned bid = blockIdx.x;
+    // unsigned i = blockIdx.x * blockDim.x;
 
-    for(unsigned B = 2 + blockNumber; B < primesNumber; B += gridDim.x) {
-        
+    const unsigned max_it = 400000 / threads;
+
+    const unsigned b_start = 2 + bid;//bid * blockDim.x / max_it;
+    const unsigned b_inc = gridDim.x;//threads / max_it;
+
+    unsigned B;
+    const unsigned B_MAX = 2000000000;
+    unsigned it;
+    unsigned p_i;
+    unsigned power;
+    unsigned prime_ul;
+
+    mpz_t a, d, e, b, tmp;
+
+    mpz_init(&a);
+    mpz_init(&d);
+    mpz_init(&e);
+    mpz_init(&b);
+    mpz_init(&tmp);
+
+    // try a variety of a values
+    mpz_set_ui(&a, (unsigned long) tid * max_it + 2);
+
+    for (B = b_start; B < B_MAX; B += b_inc) {
+
+        /* Compute e as a product of prime powers */
+        prime_ul = (unsigned long) primes[0];
+        mpz_set_lui(&e, (unsigned long) 1);
+        for (p_i = 0; prime_ul < B; p_i ++) {
+            if (*resultPlace) return;
+
+            power = (unsigned) (log((double) B) / log((double) prime_ul));
+            mpz_mult_u(&tmp, &e, (unsigned) pow((double) prime_ul, (double) power));
+
+            if (*resultPlace) return;
+
+            mpz_set(&e, &tmp);
+            prime_ul = primes[p_i + 1];
+        }
+
+        if (mpz_equal_one(&e)) continue;
+        if (*resultPlace) return;
+
+        for (it = 0; it < max_it; it ++) {
+            // printf("it = %d\n", it);
+
+            if (*resultPlace) return;
+
+            // check for a freebie
+            mpz_gcd(&d, &a, &n);
+            // if (*finished) return;
+            if (mpz_gt_one(&d)) {
+                char buffer[1024] {};
+                mpz_get_str(&d, buffer, 1024);
+                printf("Found: %s\n", buffer);
+
+                atomicAdd(resultPlace, it);
+            }
+            if (*resultPlace) return;
+
+            mpz_powmod(&b, &a, &e, &n);  // b = (a ** e) % n
+            mpz_addeq_i(&b, -1);                        // b -= 1
+            mpz_gcd(&d, &b, &n);                // d = gcd(tmp, n)
+
+            if (*resultPlace) return;
+
+            // success!
+            if (mpz_gt_one(&d) && mpz_lt(&d, &n)) {
+                char buffer[1024] {};
+                mpz_get_str(&d, buffer, 1024);
+                printf("Found: %s\n", buffer);
+
+                atomicAdd(resultPlace, it);
+            }
+
+            mpz_addeq_i(&a, threads * max_it);              // a += 1
+        }
     }
+}
+
+std::ostream& operator<<(std::ostream& stream, const mpz_t& number) {
+    char buffer[1024] {};
+    mpz_get_str(&number, buffer, 1024);
+    return stream << buffer;
 }
 
 int main(int argc, const char* const* argv) {
@@ -43,25 +123,24 @@ int main(int argc, const char* const* argv) {
         if(argc < 3)
             throw std::invalid_argument("Usage: <Number to factorize> <Prime table location>.");
 
+        /* Factorizing number. */
+        const mpz_t number = [&argv] {
+            mpz_t number {}; mpz_init(&number); mpz_set_str(&number, argv[1]); return number;
+        } ();
+        std::cout << "Factorizing number 0x" << number << std::endl;
+
         /* Prime table. */
         const std::filesystem::path primeTableLocation = argv[2];
         const thrust::device_vector<uint64_t> primes = loadPrimeTable(primeTableLocation);
-        /* Factorizing number. */
-        const thrust::device_vector<char> numberToFactorize = [&argv] {
-            const std::string stringNumber = argv[1];
+        std::cout << "Prime table prepared and loaded to device." << std::endl;
 
-            thrust::device_vector<char> stringNumberGPU = std::vector<char>(stringNumber.begin(), stringNumber.end());
-            stringNumberGPU.push_back('\0');
-
-            return stringNumberGPU;
-        } ();
         /* Place for result. */
-        thrust::device_ptr<uint8_t> resultFlag {};
+        thrust::device_ptr<unsigned> resultFlag = thrust::device_malloc<unsigned>(1);
+        std::cout << "Data prepared and loaded." << std::endl;
 
-        findDivisor<<<16, 16>>>(
-                thrust::raw_pointer_cast(numberToFactorize.data()),
+        findDivisor<<<512, 512>>>(
+                number,
                 thrust::raw_pointer_cast(primes.data()),
-                primes.size(),
                 thrust::raw_pointer_cast(resultFlag));
         if(cudaSuccess != cudaDeviceSynchronize())
             throw std::runtime_error("Kernel launch failed.");
