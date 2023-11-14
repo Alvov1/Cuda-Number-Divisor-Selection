@@ -670,8 +670,6 @@ __device__ __inline__ void mpz_powmod_tmp(mpz_t *result, mpz_t *base,
                                           // temps
                                           mpz_t *tmp1, mpz_t *tmp2,
                                           mpz_t *tmp3) {
-  unsigned iteration;
-
   mpz_t *b = tmp3;
 
   // result = 1
@@ -681,10 +679,11 @@ __device__ __inline__ void mpz_powmod_tmp(mpz_t *result, mpz_t *base,
   mpz_set(tmp1, base);
   mpz_div(tmp2, b, tmp1, mod);
 
-  iteration = 0;
+  unsigned iteration; iteration = 0;
   while (!bits_is_zero(exp->digits, exp->capacity, iteration)) {
     // if (binary_exp is odd)
     if (digits_bit_at(exp->digits, iteration) == 1) {
+
       // result = (result * base) % mod
       mpz_mult(tmp1, result, b);
       mpz_div(tmp2, result, tmp1, mod);

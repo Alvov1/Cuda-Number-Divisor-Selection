@@ -27,14 +27,14 @@ std::vector<uint64_t> loadPrimeTable(const std::filesystem::path &fromLocation) 
 }
 
 __global__ void findDivisor(mpz_t n, const uint64_t* primes, unsigned* resultPlace) {
-    const unsigned tid = blockDim.x * blockIdx.x + threadIdx.x;
+    const unsigned threadIndex = blockDim.x * blockIdx.x + threadIdx.x;
     const unsigned threads = gridDim.x * blockDim.x;
-    const unsigned bid = blockIdx.x;
+    const unsigned blockIndex = blockIdx.x;
     // unsigned i = blockIdx.x * blockDim.x;
 
     const unsigned max_it = 400000 / threads;
 
-    const unsigned b_start = 2 + bid;//bid * blockDim.x / max_it;
+    const unsigned b_start = 2 + blockIndex;//blockIndex * blockDim.x / max_it;
     const unsigned b_inc = gridDim.x;//threads / max_it;
 
     unsigned B;
@@ -52,12 +52,9 @@ __global__ void findDivisor(mpz_t n, const uint64_t* primes, unsigned* resultPla
     mpz_init(&b);
     mpz_init(&tmp);
 
-    // try a variety of a values
-    mpz_set_ui(&a, (unsigned long) tid * max_it + 2);
+    mpz_set_ui(&a, (unsigned long) threadIndex * max_it + 2);
 
     for (B = b_start; B < B_MAX; B += b_inc) {
-
-        /* Compute e as a product of prime powers */
         prime_ul = (unsigned long) primes[0];
         mpz_set_lui(&e, (unsigned long) 1);
         for (p_i = 0; prime_ul < B; p_i ++) {
@@ -76,14 +73,13 @@ __global__ void findDivisor(mpz_t n, const uint64_t* primes, unsigned* resultPla
         if (*resultPlace) return;
 
         for (it = 0; it < max_it; it ++) {
-            // printf("it = %d\n", it);
 
             if (*resultPlace) return;
 
-            // check for a freebie
-            mpz_gcd(&d, &a, &n);
-            // if (*finished) return;
-            if (mpz_gt_one(&d)) {
+
+            mpz_gcd(&d, &a, &n);                // gcd = gcd(a, n)
+
+            if (mpz_gt_one(&d)) {               // if d > 1
                 char buffer[1024] {};
                 mpz_get_str(&d, buffer, 1024);
                 printf("Found: %s\n", buffer);
@@ -92,8 +88,8 @@ __global__ void findDivisor(mpz_t n, const uint64_t* primes, unsigned* resultPla
             }
             if (*resultPlace) return;
 
-            mpz_powmod(&b, &a, &e, &n);  // b = (a ** e) % n
-            mpz_addeq_i(&b, -1);                        // b -= 1
+            mpz_powmod(&b, &a, &e, &n);         // b = (a ** e) % n
+            mpz_addeq_i(&b, -1);                // b -= 1
             mpz_gcd(&d, &b, &n);                // d = gcd(tmp, n)
 
             if (*resultPlace) return;
@@ -144,6 +140,7 @@ int main(int argc, const char* const* argv) {
                 thrust::raw_pointer_cast(resultFlag));
         if(cudaSuccess != cudaDeviceSynchronize())
             throw std::runtime_error("Kernel launch failed.");
+        std::cout << "Kernel launch completed." << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
