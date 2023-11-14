@@ -134,7 +134,7 @@ int main(int argc, const char* const* argv) {
         thrust::device_ptr<unsigned> resultFlag = thrust::device_malloc<unsigned>(1);
         std::cout << "Data prepared and loaded." << std::endl;
 
-        findDivisor<<<512, 512>>>(
+        findDivisor<<<32, 32>>>(
                 number,
                 thrust::raw_pointer_cast(primes.data()),
                 thrust::raw_pointer_cast(resultFlag));
